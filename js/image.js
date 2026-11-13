@@ -34,6 +34,7 @@ export async function compressImage(file) {
   canvas.getContext('2d').drawImage(source, 0, 0, canvas.width, canvas.height);
   source.close?.();
   const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', QUALITY));
-  // Om något går fel med komprimeringen sparas originalet hellre än ingenting.
-  return blob && blob.size < file.size ? blob : file;
+  // JPEG används alltid när det går (t.ex. iPhones HEIC-bilder kan inte visas överallt).
+  // Om komprimeringen misslyckas sparas originalet hellre än ingenting.
+  return blob || file;
 }

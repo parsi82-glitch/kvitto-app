@@ -9,8 +9,8 @@ framtida försäljning enkelt kan ta fram underlag för avdrag för
 
 | Fas | Innehåll | Status |
 |-----|----------|--------|
-| 1 | Grundapp: registrera kvitto med foto, lista, sammanställning, CSV-export. Data sparas lokalt i telefonen. | Pågår |
-| 2 | Delad databas (Supabase) så att två personer ser samma kvitton. Inloggning. | Planerad |
+| 1 | Grundapp: registrera kvitto med foto, lista, sammanställning, CSV-export. | Klar |
+| 2 | Delad databas (Supabase) så att två personer ser samma kvitton. Inloggning. | Pågår |
 | 3 | AI-avläsning av kvittofoton (Claude API via Supabase Edge Function). | Planerad |
 | 4 | Drift: keep-alive via GitHub Actions, finslipning. | Planerad |
 
@@ -46,7 +46,9 @@ framtida försäljning enkelt kan ta fram underlag för avdrag för
 
 - Ren HTML, CSS och JavaScript – inget byggsteg, publiceras direkt via GitHub Pages.
 - PWA: kan läggas till på hemskärmen och fungerar offline.
-- Fas 1: data och foton sparas i telefonens webbläsare (IndexedDB).
+- Data och foton sparas i Supabase (Postgres + Storage), skyddat med inloggning och Row Level Security.
+  Uppsättning: se [`supabase/SETUP.md`](supabase/SETUP.md).
+- Supabase-biblioteket ligger i `vendor/` (låst version) så att appen inte beror på ett externt CDN.
 
 ### Filer
 
@@ -55,11 +57,14 @@ framtida försäljning enkelt kan ta fram underlag för avdrag för
 | `index.html` | Sidans struktur |
 | `styles.css` | Utseende |
 | `js/app.js` | Gränssnitt och navigering |
-| `js/store.js` | Lagring av kvitton (byts mot Supabase i fas 2) |
+| `js/store.js` | Lagring av kvitton och foton samt inloggning (Supabase) |
+| `js/config.js` | Supabase-adress och publik nyckel |
 | `js/tax.js` | Avdragsberäkning enligt reglerna ovan |
 | `js/image.js` | Förminskning av foton före lagring |
 | `js/csv.js` | Export till CSV (öppnas i Excel) |
 | `sw.js`, `manifest.webmanifest` | PWA: offline och hemskärmsikon |
+| `supabase/migrations/` | Databasens tabeller, regler och lagring (SQL) |
+| `vendor/` | Supabase JavaScript-bibliotek (MIT-licens) |
 
 ## Köra lokalt
 

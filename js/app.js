@@ -77,7 +77,6 @@ async function renderList() {
   if (receipts.length === 0) {
     view.innerHTML = `
       <div class="stack">
-        ${phaseNotice()}
         <div class="card empty">
           <div class="icon" aria-hidden="true">🧾</div>
           <h2>Inga kvitton ännu</h2>
@@ -93,7 +92,6 @@ async function renderList() {
 
   view.innerHTML = `
     <div class="stack">
-      ${phaseNotice()}
       <div class="filters">
         <select id="f-year" aria-label="År">
           <option value="all">Alla år</option>
@@ -146,7 +144,7 @@ function itemHtml(r) {
   return `
     <li class="receipt-item">
       <a href="#/kvitto/${encodeURIComponent(r.id)}">
-        ${r.hasPhoto ? `<img class="thumb" data-photo="${esc(r.id)}" alt="">` : `<span class="thumb" aria-hidden="true">🧾</span>`}
+        ${r.hasPhoto ? `<img class="thumb" data-photo="${esc(r.photoPath)}" alt="">` : `<span class="thumb" aria-hidden="true">🧾</span>`}
         <span class="receipt-main">
           <span class="receipt-store" style="display:block">${esc(r.store)}</span>
           <span class="receipt-meta" style="display:block">${esc(formatDate(r.date))} · ${esc(r.category)}</span>
@@ -159,21 +157,27 @@ function itemHtml(r) {
     </li>`;
 }
 
+// Tillfälliga fotolänkar sparas en stund så att listan inte hämtar nya vid varje filtrering.
+const photoUrlCache = new Map();
+
 async function loadThumbnails(container) {
-  releaseUrls();
-  for (const img of container.querySelectorAll('img[data-photo]')) {
-    const blob = await store.getPhoto(img.dataset.photo);
-    if (blob && img.isConnected) img.src = trackUrl(blob);
+  const imgs = [...container.querySelectorAll('img[data-photo]')];
+  const missing = imgs.map((img) => img.dataset.photo).filter((p) => !photoUrlCache.has(p));
+  if (missing.length) {
+    try {
+      const urls = await store.getPhotoUrls(missing);
+      for (const [path, url] of Object.entries(urls)) photoUrlCache.set(path, url);
+      setTimeout(() => missing.forEach((p) => photoUrlCache.delete(p)), 50 * 60 * 1000);
+    } catch (err) {
+      console.warn('Kunde inte hämta foton', err);
+    }
+  }
+  for (const img of imgs) {
+    const url = photoUrlCache.get(img.dataset.photo);
+    if (url && img.isConnected) img.src = url;
   }
 }
 
-function phaseNotice() {
-  return `
-    <div class="notice">
-      <strong>Testversion (fas 1)</strong>
-      Kvittona sparas bara i den här telefonen. Lägg appen på hemskärmen och exportera till Excel då och då.
-    </div>`;
-}
 
 // ---------------------------------------------------------------- Formulär
 
@@ -195,6 +199,7 @@ async function renderForm(id) {
 
   view.innerHTML = `
     <form id="form" class="stack" novalidate>
+      ${existing ? `<p class="muted small" style="margin:0">Senast ändrad ${esc(formatDate(existing.updatedAt?.slice(0, 10) || existing.date))}</p>` : ''}
       <div class="photo-box" id="photo-box">
         <span class="muted small" id="photo-empty">Inget foto</span>
       </div>
@@ -266,18 +271,24 @@ async function renderForm(id) {
   const form = view.querySelector('#form');
   const photoBox = view.querySelector('#photo-box');
 
-  const showPreview = (blob) => {
+  const showPreview = (source) => {
     releaseUrls();
-    if (!blob) {
+    if (!source) {
       photoBox.innerHTML = '<span class="muted small">Inget foto</span>';
       return;
     }
-    const url = trackUrl(blob);
+    const url = typeof source === 'string' ? source : trackUrl(source);
     photoBox.innerHTML = `<img src="${url}" alt="Kvittofoto – tryck för att förstora">`;
     photoBox.querySelector('img').addEventListener('click', () => showPhoto(url));
   };
 
-  if (existing?.hasPhoto) showPreview(await store.getPhoto(existing.id));
+  if (existing?.photoPath) {
+    photoBox.innerHTML = '<span class="muted small">Hämtar foto…</span>';
+    store
+      .getPhotoUrl(existing.photoPath)
+      .then((url) => pendingPhoto === undefined && showPreview(url))
+      .catch(() => pendingPhoto === undefined && showPreview(null));
+  }
 
   view.querySelectorAll('[data-photo-input]').forEach((input) =>
     input.addEventListener('change', async () => {
@@ -320,21 +331,31 @@ async function renderForm(id) {
       classification: data.get('classification'),
       comment: String(data.get('comment')).trim(),
     };
+    const submitBtn = form.querySelector('button[type="submit"]');
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Sparar…';
     try {
       await store.saveReceipt(record, existing ? pendingPhoto : pendingPhoto ?? null);
       toast(existing ? 'Ändringar sparade' : 'Kvitto sparat');
       location.hash = '#/';
     } catch (err) {
       console.error(err);
-      toast('Kunde inte spara – försök igen');
+      toast(navigator.onLine ? 'Kunde inte spara – försök igen' : 'Ingen uppkoppling – försök igen när du har nät');
+      submitBtn.disabled = false;
+      submitBtn.textContent = existing ? 'Spara ändringar' : 'Spara kvitto';
     }
   });
 
   view.querySelector('#delete')?.addEventListener('click', async () => {
     if (!confirm(`Ta bort kvittot från ${existing.store}? Det går inte att ångra.`)) return;
-    await store.deleteReceipt(existing.id);
-    toast('Kvitto borttaget');
-    location.hash = '#/';
+    try {
+      await store.deleteReceipt(existing.id);
+      toast('Kvitto borttaget');
+      location.hash = '#/';
+    } catch (err) {
+      console.error(err);
+      toast('Kunde inte ta bort – försök igen');
+    }
   });
 }
 
@@ -368,8 +389,14 @@ async function renderSummary() {
           <a href="https://skatteverket.se/f%C3%B6rb%C3%A4ttringsutgifter" target="_blank" rel="noopener">Skatteverket</a>.</p>
       </details>
       <button class="btn block" id="export">Exportera alla kvitton (CSV)</button>
+      <div class="card row">
+        <span class="small muted">Inloggad som <strong>${esc(currentUser?.email)}</strong></span>
+        <span class="spacer"></span>
+        <button class="btn" id="logout">Logga ut</button>
+      </div>
     </div>`;
 
+  view.querySelector('#logout').addEventListener('click', () => store.signOut());
   const out = view.querySelector('#summary');
   const draw = () => {
     const { rows, totals } = summarize(receipts, saleYear);
@@ -425,26 +452,104 @@ function yearRowHtml(r) {
     </tr>`;
 }
 
+// ---------------------------------------------------------------- Inloggning
+
+let currentUser = null;
+let memberChecked = false;
+
+function renderLogin() {
+  titleEl.textContent = 'Logga in';
+  document.body.classList.add('logged-out');
+  view.innerHTML = `
+    <form id="login" class="card stack" novalidate>
+      <p class="muted" style="margin:0">Logga in med kontot du fått för kvitto-appen.</p>
+      <div class="field">
+        <label for="email">E-post</label>
+        <input class="field-input" id="email" name="email" type="email" autocomplete="username" required>
+      </div>
+      <div class="field">
+        <label for="password">Lösenord</label>
+        <input class="field-input" id="password" name="password" type="password" autocomplete="current-password" required>
+      </div>
+      <button class="btn primary block" type="submit">Logga in</button>
+    </form>`;
+
+  const form = view.querySelector('#login');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = form.querySelector('button');
+    const data = new FormData(form);
+    btn.disabled = true;
+    btn.textContent = 'Loggar in…';
+    try {
+      await store.signIn(String(data.get('email')).trim(), String(data.get('password')));
+      // onAuthChange ritar om sidan
+    } catch (err) {
+      console.error(err);
+      toast(err?.status === 400 ? 'Fel e-post eller lösenord' : 'Kunde inte logga in – kontrollera uppkopplingen');
+      btn.disabled = false;
+      btn.textContent = 'Logga in';
+    }
+  });
+}
+
+function renderNotMember() {
+  titleEl.textContent = 'Ingen åtkomst';
+  document.body.classList.add('logged-out');
+  view.innerHTML = `
+    <div class="card stack">
+      <h2 style="margin:0">Kontot saknar åtkomst</h2>
+      <p class="muted">Du är inloggad som <strong>${esc(currentUser?.email)}</strong>, men kontot är inte tillagt i hushållets medlemslista.</p>
+      <button class="btn block" id="logout">Logga ut</button>
+    </div>`;
+  view.querySelector('#logout').addEventListener('click', () => store.signOut());
+}
+
 // ---------------------------------------------------------------- Router
 
 async function route() {
   releaseUrls();
   const hash = location.hash.replace(/^#/, '') || '/';
   try {
+    currentUser = await store.getUser();
+    if (!currentUser) {
+      memberChecked = false;
+      renderLogin();
+      return;
+    }
+    if (!memberChecked) {
+      if (!(await store.isMember())) {
+        renderNotMember();
+        return;
+      }
+      memberChecked = true;
+    }
+    document.body.classList.remove('logged-out');
     if (hash === '/ny') await renderForm(null);
     else if (hash.startsWith('/kvitto/')) await renderForm(decodeURIComponent(hash.slice('/kvitto/'.length)));
     else if (hash === '/summering') await renderSummary();
     else await renderList();
   } catch (err) {
     console.error(err);
-    view.innerHTML = `<div class="card"><h2>Något gick fel</h2><p class="muted">${esc(err.message)}</p></div>`;
+    view.innerHTML = `
+      <div class="card stack">
+        <h2 style="margin:0">Något gick fel</h2>
+        <p class="muted">${navigator.onLine ? esc(err.message || 'Okänt fel') : 'Ingen uppkoppling. Kvittona hämtas från internet.'}</p>
+        <button class="btn primary block" id="retry">Försök igen</button>
+      </div>`;
+    view.querySelector('#retry').addEventListener('click', route);
   }
   window.scrollTo(0, 0);
 }
 
 window.addEventListener('hashchange', route);
+store.onAuthChange((event) => {
+  if (event === 'SIGNED_IN' || event === 'SIGNED_OUT') {
+    memberChecked = false;
+    route();
+  }
+});
 route();
-store.requestPersistence();
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').catch((err) => console.warn('Service worker:', err));
