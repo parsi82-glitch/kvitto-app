@@ -2,13 +2,15 @@
 // Strategi "nätverket först": ny kod hämtas alltid när det finns uppkoppling,
 // den sparade kopian används bara offline. Då fastnar ingen på en gammal version.
 
-const CACHE = 'kvitto-app-v1';
+const CACHE = 'kvitto-app-v2';
 const ASSETS = [
   './',
   './index.html',
   './styles.css',
   './manifest.webmanifest',
   './js/app.js',
+  './js/config.js',
+  './vendor/supabase-2.118.0.js',
   './js/store.js',
   './js/tax.js',
   './js/image.js',

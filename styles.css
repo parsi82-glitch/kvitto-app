@@ -59,6 +59,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 /* ---------- Topbar & tabbar ---------- */
 
+body.logged-out .tabbar { display: none; }
+
 .topbar {
   position: sticky;
   top: 0;
